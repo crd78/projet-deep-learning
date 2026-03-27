@@ -1,8 +1,4 @@
-"""
-Script de splitting du dataset avec stratification des classes
-Conserve la proportion de chaque classe dans train/val/test
-Compatible avec multi-label (plusieurs maladies par image)
-"""
+
 
 import os
 import shutil
@@ -18,10 +14,17 @@ from tqdm import tqdm
 # CONFIGURATION
 # ============================================================================
 
-# Chemins
-CSV_PATH = "../data_train/kaggle/working/data/train_meta_data.csv"
-TRAIN_DATA_DIR = "../data_train/kaggle/working/data/train_data"
-OUTPUT_BASE_DIR = "../data_train/kaggle/working/data"
+
+# Chemins adaptés au dataset NIH
+CSV_PATH = "../Data_Entry_2017.csv"
+TEST_LIST_PATH = "../test_list.txt"
+TRAINVAL_LIST_PATH = "../train_val_list.txt"
+IMAGES_ROOTS = [
+    "../images_001/images/", "../images_002/images/", "../images_003/images/", "../images_004/images/",
+    "../images_005/images/", "../images_006/images/", "../images_007/images/", "../images_008/images/",
+    "../images_009/images/", "../images_010/images/", "../images_011/images/", "../images_012/images/"
+]
+OUTPUT_BASE_DIR = "../output_split"
 
 # Proportions (doit sommer à 1.0)
 TRAIN_RATIO = 0.70                            # 70% pour entraînement
@@ -40,40 +43,37 @@ COPY_IMAGES = True                # Copier les images (False = créer des symlin
 # FONCTIONS
 # ============================================================================
 
+
 def load_metadata(csv_path):
-    """Charger et parser le CSV"""
+    """Charger et parser le CSV NIH"""
     print(f"📖 Chargement du CSV : {csv_path}")
     df = pd.read_csv(csv_path)
     print(f"✓ {len(df)} images chargées")
     print(f"Colonnes : {list(df.columns)}")
     return df
 
+
 def parse_diseases(disease_str):
-    """Parser la colonne Diseases (format string de liste)"""
+    """Parser la colonne Finding Labels (séparateur |, multi-label)"""
     if pd.isna(disease_str):
         return []
-    # Convertir le string en liste Python
-    try:
-        import ast
-        return ast.literal_eval(disease_str)
-    except:
-        return []
+    if disease_str == 'No Finding':
+        return ['No Finding']
+    return [d.strip() for d in disease_str.split('|')]
+
 
 def create_stratify_column(df, strategy="primary_disease"):
     """Créer une colonne pour la stratification"""
     if strategy == "primary_disease":
-        # Utiliser la première maladie seulement
-        df['stratify_col'] = df['Diseases'].apply(
+        df['stratify_col'] = df['Finding Labels'].apply(
             lambda x: parse_diseases(x)[0] if parse_diseases(x) else 'Unknown'
         )
     elif strategy == "all_diseases":
-        # Utiliser toutes les maladies combinées
-        df['stratify_col'] = df['Diseases'].apply(
+        df['stratify_col'] = df['Finding Labels'].apply(
             lambda x: '_'.join(sorted(parse_diseases(x))) if parse_diseases(x) else 'Unknown'
         )
     else:
         raise ValueError(f"Stratégie inconnue : {strategy}")
-    
     return df
 
 def check_distribution(df, label_column, title):
@@ -139,55 +139,48 @@ def create_directory_structure(base_dir, classes, subdirs=['train', 'val', 'test
     
     print("✓ Dossiers créés")
 
-def copy_files(df, source_dir, dest_dir, subset_name, valid_classes, copy=True):
-    """Copier ou créer des symlinks pour les images"""
+
+def find_image_path(image_name):
+    """Trouver le chemin d'une image dans tous les dossiers images_XXX/images/"""
+    for root in IMAGES_ROOTS:
+        candidate = os.path.join(root, image_name)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+def copy_files(df, dest_dir, subset_name, valid_classes, copy=True):
+    """Copier ou créer des symlinks pour les images NIH"""
     print(f"\n📸 Traitement du subset {subset_name.upper()} ({len(df)} images)...")
-    
     success = 0
     errors = []
-    
     for idx, row in tqdm(df.iterrows(), total=len(df)):
         image_name = row['Image Index']
-        source_path = os.path.join(source_dir, image_name)
-        
-        # Déterminer la classe (première maladie)
-        diseases = parse_diseases(row['Diseases'])
+        source_path = find_image_path(image_name)
+        diseases = parse_diseases(row['Finding Labels'])
         class_name = diseases[0] if diseases else 'Unknown'
-
-        # skip si classe supprimée
         if class_name not in valid_classes:
             continue
-        
-        # Chemin de destination
         dest_path = os.path.join(dest_dir, class_name, image_name)
-        
         try:
-            if not os.path.exists(source_path):
-                errors.append(f"Source not found: {source_path}")
+            if not source_path or not os.path.exists(source_path):
+                errors.append(f"Source not found: {image_name}")
                 continue
-            
             if copy:
-                # Copier le fichier
                 shutil.copy2(source_path, dest_path)
             else:
-                # Créer un symlink (économe en espace)
                 if os.path.exists(dest_path):
                     os.remove(dest_path)
                 os.symlink(os.path.abspath(source_path), dest_path)
-            
             success += 1
         except Exception as e:
             errors.append(f"Error with {image_name}: {str(e)}")
-    
     print(f"✓ {success}/{len(df)} images traitées")
-    
     if errors:
         print(f"⚠️  {len(errors)} erreurs:")
-        for err in errors[:5]:  # Afficher les 5 premières
+        for err in errors[:5]:
             print(f"  - {err}")
         if len(errors) > 5:
             print(f"  ... et {len(errors) - 5} autres")
-    
     return success, errors
 
 def save_metadata(train_df, val_df, test_df, output_dir):
@@ -261,20 +254,25 @@ def generate_report(train_df, val_df, test_df, output_dir):
     print("✓ Rapport sauvegardé")
     print("="*70)
 
+
 def main():
-    """Fonction principale"""
-    
     print("="*70)
-    print("🔄 SPLITTING DU DATASET AVEC STRATIFICATION")
+    print("🔄 SPLITTING DU DATASET NIH AVEC SPLIT OFFICIEL")
     print("="*70)
-    
+
     # 1. Charger les données
     df = load_metadata(CSV_PATH)
-    
-    # 2. Créer la colonne de stratification
+
+    # 2. Charger les splits officiels
+    with open(TEST_LIST_PATH, 'r') as f:
+        test_list = set([line.strip() for line in f if line.strip()])
+    with open(TRAINVAL_LIST_PATH, 'r') as f:
+        trainval_list = set([line.strip() for line in f if line.strip()])
+
+    # 3. Créer la colonne de stratification
     df = create_stratify_column(df, strategy=STRATIFY_BY)
-    
-    # 3. Supprimer les images dont la catégorie principale a moins de 50 images
+
+    # 4. Supprimer les images dont la catégorie principale a moins de 50 images
     min_images = 50
     class_counts = df['stratify_col'].value_counts()
     valid_classes = class_counts[class_counts >= min_images].index
@@ -282,61 +280,49 @@ def main():
     print(f"Catégories conservées (>=50 images): {list(valid_classes)}")
     print(f"Nombre d'images après filtrage: {len(df)}")
 
-    # 4. Afficher la distribution originale
-    print("\n" + "="*70)
-    check_distribution(df, 'stratify_col', "ORIGINALE")
-    print("="*70)
-    
-    # 4. Splitter les données
-    train_df, val_df, test_df = split_data(
-        df,
-        train_ratio=TRAIN_RATIO,
-        val_ratio=VAL_RATIO,
-        test_ratio=TEST_RATIO,
+    # 5. Split officiel
+    test_df = df[df['Image Index'].isin(test_list)].copy()
+    trainval_df = df[df['Image Index'].isin(trainval_list)].copy()
+
+    # 6. Split interne train/val (stratifié)
+    val_ratio = VAL_RATIO / (TRAIN_RATIO + VAL_RATIO)
+    train_df, val_df = train_test_split(
+        trainval_df,
+        test_size=val_ratio,
+        stratify=trainval_df['stratify_col'],
         random_state=RANDOM_STATE
     )
-    
-    # 5. Vérifier que la distribution est conservée
+
+    # 7. Afficher la distribution
     print("\n" + "="*70)
-    print("VÉRIFICATION DE LA STRATIFICATION")
-    print("="*70)
     check_distribution(train_df, 'stratify_col', "TRAIN")
     check_distribution(val_df, 'stratify_col', "VALIDATION")
     check_distribution(test_df, 'stratify_col', "TEST")
     print("="*70)
 
-    # Afficher la distribution exacte par split pour debug
-    for name, subset_df in [('train', train_df), ('val', val_df), ('test', test_df)]:
-        print(f"\nDistribution brute pour {name}:")
-        print(subset_df['stratify_col'].value_counts())
-    
-    # 6. Créer la structure des dossiers
+    # 8. Créer la structure des dossiers
     os.makedirs(OUTPUT_BASE_DIR, exist_ok=True)
-    
     if CREATE_SUBDIRS:
         unique_classes = sorted(valid_classes)
         create_directory_structure(OUTPUT_BASE_DIR, unique_classes)
-    
-    # 7. Copier les fichiers
+
+    # 9. Copier les fichiers
     if COPY_IMAGES:
-        copy_files(train_df, TRAIN_DATA_DIR, os.path.join(OUTPUT_BASE_DIR, 'train'), 'train', valid_classes, copy=True)
-        copy_files(val_df, TRAIN_DATA_DIR, os.path.join(OUTPUT_BASE_DIR, 'val'), 'validation', valid_classes, copy=True)
-        copy_files(test_df, TRAIN_DATA_DIR, os.path.join(OUTPUT_BASE_DIR, 'test'), 'test', valid_classes, copy=True)
-    
-    # 8. Sauvegarder les métadonnées
+        copy_files(train_df, os.path.join(OUTPUT_BASE_DIR, 'train'), 'train', valid_classes, copy=True)
+        copy_files(val_df, os.path.join(OUTPUT_BASE_DIR, 'val'), 'validation', valid_classes, copy=True)
+        copy_files(test_df, os.path.join(OUTPUT_BASE_DIR, 'test'), 'test', valid_classes, copy=True)
+
+    # 10. Sauvegarder les métadonnées
     save_metadata(train_df, val_df, test_df, OUTPUT_BASE_DIR)
-    
-    # 9. Générer un rapport
+
+    # 11. Générer un rapport
     generate_report(train_df, val_df, test_df, OUTPUT_BASE_DIR)
-    
+
     print("\n✅ Splitting terminé avec succès!")
     print(f"📂 Données disponibles dans : {OUTPUT_BASE_DIR}/")
     print("\nStructure finale:")
     print(f"{OUTPUT_BASE_DIR}/")
     print("├── train/")
-    print("│   ├── Atelectasis/")
-    print("│   ├── Infiltration/")
-    print("│   └── ...")
     print("├── val/")
     print("├── test/")
     print("├── train_metadata.csv")
