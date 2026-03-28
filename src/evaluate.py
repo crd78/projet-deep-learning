@@ -1,63 +1,54 @@
-import os
 import torch
-import torch.nn as nn
-from torchvision import datasets, transforms, models
-from torch.utils.data import DataLoader
-from sklearn.metrics import confusion_matrix, classification_report
 import numpy as np
+from sklearn.metrics import classification_report
+from utils import get_dataloaders, SimpleCNN
+from train import get_model  # On importe get_model pour ne pas réécrire l'architecture
+from tqdm import tqdm
 
-def main():
-    data_dir = "../data_train/kaggle/working/data"
-    batch_size = 32
-    img_size = 224
+def evaluate_model(model_path, model_type='scratch'):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Device:", device)
 
-    # Transforms (doit être identique à l'entraînement)
-    transform = transforms.Compose([
-        transforms.Grayscale(num_output_channels=1),
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5], [0.5])
-    ])
-
-    # Dataset & DataLoader
-    test_dataset = datasets.ImageFolder(os.path.join(data_dir, "test"), transform=transform)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
-
-    num_classes = len(test_dataset.classes)
-    print("Classes:", test_dataset.classes)
-
-    # Modèle (doit être identique à l'entraînement)
-    model = models.resnet18(pretrained=False)
-    if model.conv1.in_channels == 3:
-        model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
-    model.load_state_dict(torch.load("model.pth", map_location=device))
-    model = model.to(device)
+    classes = ['Atelectasis','Cardiomegaly','Consolidation','Edema','Effusion',
+               'Emphysema','Fibrosis','Infiltration','Mass','Nodule',
+               'Pleural_Thickening','Pneumonia','Pneumothorax']
+    
+    # 1. Charger les données
+    _, _, test_loader = get_dataloaders(batch_size=32)
+    
+    # 2. Configurer le modèle selon le type
+    num_classes = len(classes)
+    
+    # On utilise la fonction de ton train.py pour être sûr d'avoir la même structure
+    model = get_model(model_type, num_classes, device)
+    
+    # Chargement des poids
+    print(f"Chargement des poids depuis {model_path}...")
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
-
+    
     all_preds = []
     all_labels = []
-
+    
+    print(f"Évaluation du modèle : {model_type} sur {device}...")
+    
     with torch.no_grad():
-        for imgs, labels in test_loader:
-            imgs, labels = imgs.to(device), labels.to(device)
-            outputs = model(imgs)
-            _, preds = outputs.max(1)
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-
-    acc = np.mean(np.array(all_preds) == np.array(all_labels))
-    print(f"Test Accuracy: {acc:.4f}")
-
-    # Rapport de classification
-    print("\nClassification Report:")
-    print(classification_report(all_labels, all_preds, target_names=test_dataset.classes))
-
-    # Matrice de confusion
-    print("Confusion Matrix:")
-    print(confusion_matrix(all_labels, all_preds))
+        for images, labels in tqdm(test_loader, desc="Inférence"):
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            
+            # On garde le seuil à 0.2 comme tu as testé
+            preds = torch.sigmoid(outputs) > 0.2
+            
+            all_preds.append(preds.cpu().numpy())
+            all_labels.append(labels.cpu().numpy())
+            
+    all_preds = np.vstack(all_preds)
+    all_labels = np.vstack(all_labels)
+    
+    print(f"\n--- Rapport de Classification ({model_type.upper()}) ---")
+    print(classification_report(all_labels, all_preds, target_names=classes, zero_division=0))
 
 if __name__ == "__main__":
-    main()
+   
+    # evaluate_model("model_resnet_best.pth", model_type='resnet')
+    evaluate_model("model_densenet_best.pth", model_type='densenet')

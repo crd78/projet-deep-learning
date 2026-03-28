@@ -34,3 +34,13 @@ images_008/
 test_list.txt
 
 train_val_list.txt
+
+*.png
+
+*.pth
+
+*.db
+
+src/mlruns/
+
+src/__pycache__/
