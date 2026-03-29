@@ -7,3 +7,5 @@ torch --pre
 torchvision --pre
 torchaudio --pre
 mlflow
+seaborn
+streamlit
